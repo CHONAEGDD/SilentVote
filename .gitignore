@@ -1,0 +1,36 @@
+# Sensitive notes (DO NOT upload)
+note.txt
+note
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+contracts/.env
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.next/
+out/
+
+# Hardhat
+contracts/cache/
+contracts/artifacts/
+contracts/typechain-types/
+
+# Logs
+*.log
+npm-debug.log*
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+

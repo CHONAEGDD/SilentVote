@@ -1,0 +1,130 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-geist-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-geist-mono: ui-monospace, SFMono-Regular, 'SF Mono', Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #050505 0%, #0a0a0a 50%, #101010 100%);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334e68;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #486581;
+}
+
+/* RainbowKit Modal Overrides */
+[data-rk] {
+  --rk-colors-accentColor: #627d98 !important;
+  --rk-colors-accentColorForeground: #f0f4f8 !important;
+  --rk-colors-modalBackground: #0a0a0a !important;
+  --rk-colors-modalBorder: #1a1a1a !important;
+  --rk-colors-modalText: #d9e2ec !important;
+  --rk-colors-modalTextSecondary: #829ab1 !important;
+  --rk-colors-closeButton: #829ab1 !important;
+  --rk-colors-closeButtonBackground: #1a1a1a !important;
+  --rk-colors-generalBorder: #243b53 !important;
+  --rk-colors-connectButtonBackground: #151515 !important;
+  --rk-colors-connectButtonText: #d9e2ec !important;
+}
+
+/* Loading animation */
+@keyframes strand-float {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 0.3;
+  }
+  50% {
+    transform: translateY(-20px) rotate(5deg);
+    opacity: 0.6;
+  }
+}
+
+.strand {
+  animation: strand-float 8s ease-in-out infinite;
+}
+
+.strand:nth-child(2) { animation-delay: -2s; }
+.strand:nth-child(3) { animation-delay: -4s; }
+.strand:nth-child(4) { animation-delay: -6s; }
+
+/* Noise overlay */
+.noise-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+}
+
+/* Glass effect */
+.glass {
+  background: rgba(10, 10, 10, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(98, 125, 152, 0.15);
+}
+
+/* Glow effect */
+.glow-frost {
+  box-shadow: 0 0 30px rgba(98, 125, 152, 0.15);
+}
+
+/* Button styles */
+.btn-primary {
+  @apply px-6 py-3 bg-frost-700 text-frost-100 rounded-lg 
+         transition-all duration-300 ease-out
+         hover:bg-frost-600 hover:shadow-lg hover:shadow-frost-700/20
+         disabled:opacity-50 disabled:cursor-not-allowed
+         active:scale-95;
+}
+
+.btn-ghost {
+  @apply px-4 py-2 border border-frost-700/30 text-frost-300 rounded-lg
+         transition-all duration-300 ease-out
+         hover:border-frost-600/50 hover:bg-frost-900/20
+         disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+/* Input styles */
+.input-field {
+  @apply w-full px-4 py-3 bg-void-800/50 border border-frost-800/30 
+         rounded-lg text-sand-100 placeholder-sand-500
+         focus:outline-none focus:border-frost-600/50 focus:ring-1 focus:ring-frost-600/30
+         transition-all duration-200;
+}
+
+/* Card styles */
+.card {
+  @apply glass rounded-xl p-6 glow-frost;
+}
+
