@@ -2,7 +2,7 @@
 
 On-chain voting with encrypted ballots — your choice stays private, only results are revealed.
 
-## Why FHE?
+## FHEVM
 
 Traditional on-chain voting exposes individual choices, enabling vote buying, coercion, and social pressure. SilentVote solves this:
 

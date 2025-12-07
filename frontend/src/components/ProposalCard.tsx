@@ -106,7 +106,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         abi: SILENTVOTE_ABI,
         functionName: "vote",
         args: [BigInt(proposal.id), encrypted.handle, encrypted.inputProof],
-        gas: 5000000n, // FHE operations need more gas
+        gas: BigInt(5000000),
       });
 
     } catch (error: any) {
