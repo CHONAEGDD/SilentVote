@@ -31,9 +31,7 @@ const config: HardhatUserConfig = {
     },
   },
   etherscan: {
-    apiKey: {
-      sepolia: ETHERSCAN_API_KEY,
-    },
+    apiKey: ETHERSCAN_API_KEY,
   },
   paths: {
     sources: "./contracts",
