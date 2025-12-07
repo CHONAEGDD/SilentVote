@@ -127,7 +127,7 @@ export async function requestPublicDecryption(
         if (typeof val === 'bigint') values.push(val);
         else if (typeof val === 'number') values.push(BigInt(val));
         else if (typeof val === 'string') values.push(BigInt(val));
-        else values.push(0n);
+        else values.push(BigInt(0));
       }
     } else if (Array.isArray(result.values)) {
       for (const val of result.values) {
@@ -137,7 +137,7 @@ export async function requestPublicDecryption(
       for (const handle of handles) {
         const val = result[handle];
         if (val !== undefined) values.push(BigInt(val));
-        else values.push(0n);
+        else values.push(BigInt(0));
       }
     }
     
