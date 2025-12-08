@@ -95,9 +95,11 @@ export async function requestPublicDecryption(
   handles: string[]
 ): Promise<{ values: bigint[] }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
+  const timeout = setTimeout(() => controller.abort(), 30000);
   
   try {
+    console.log("Requesting decryption for handles:", handles);
+    
     const response = await fetch("/api/decrypt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -109,6 +111,7 @@ export async function requestPublicDecryption(
 
     if (!response.ok) {
       const errorText = await response.text();
+      console.error("Decrypt API error response:", errorText);
       if (errorText.includes("520") || errorText.includes("Web server")) {
         throw new Error("Zama Relayer is down");
       } else if (errorText.includes("not allowed")) {
@@ -119,33 +122,64 @@ export async function requestPublicDecryption(
     }
 
     const result = await response.json();
+    console.log("Decrypt API result:", JSON.stringify(result, null, 2));
+    
     const values: bigint[] = [];
     
+    // Try different response formats from Zama Relayer
     if (result.clearValues) {
+      // Format: { clearValues: { "0x...handle": "value", ... } }
       for (const handle of handles) {
         const val = result.clearValues[handle];
-        if (typeof val === 'bigint') values.push(val);
-        else if (typeof val === 'number') values.push(BigInt(val));
-        else if (typeof val === 'string') values.push(BigInt(val));
-        else values.push(BigInt(0));
+        console.log(`Handle ${handle} -> value:`, val);
+        if (val !== undefined && val !== null) {
+          values.push(BigInt(val));
+        } else {
+          values.push(BigInt(0));
+        }
+      }
+    } else if (result.decryptedValues) {
+      // Format: { decryptedValues: { "0x...handle": value, ... } }
+      for (const handle of handles) {
+        const val = result.decryptedValues[handle];
+        console.log(`Handle ${handle} -> decryptedValue:`, val);
+        if (val !== undefined && val !== null) {
+          values.push(BigInt(val));
+        } else {
+          values.push(BigInt(0));
+        }
       }
     } else if (Array.isArray(result.values)) {
+      // Format: { values: [value1, value2, ...] }
       for (const val of result.values) {
         values.push(BigInt(val));
       }
+    } else if (Array.isArray(result)) {
+      // Format: [value1, value2, ...]
+      for (const val of result) {
+        values.push(BigInt(val));
+      }
     } else {
+      // Try direct handle lookup
       for (const handle of handles) {
         const val = result[handle];
-        if (val !== undefined) values.push(BigInt(val));
-        else values.push(BigInt(0));
+        console.log(`Direct lookup ${handle} ->`, val);
+        if (val !== undefined && val !== null) {
+          values.push(BigInt(val));
+        } else {
+          values.push(BigInt(0));
+        }
       }
     }
+    
+    console.log("Final parsed values:", values.map(v => v.toString()));
     
     return { values };
   } catch (error: any) {
     clearTimeout(timeout);
+    console.error("requestPublicDecryption error:", error);
     if (error.name === 'AbortError') {
-      throw new Error("Decryption timeout (20s)");
+      throw new Error("Decryption timeout (30s)");
     }
     throw error;
   }

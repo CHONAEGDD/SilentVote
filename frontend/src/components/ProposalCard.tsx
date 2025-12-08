@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract } from "wagmi";
+import { useState, useEffect } from "react";
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract, usePublicClient } from "wagmi";
 import { motion } from "framer-motion";
 import { useAppStore, type Proposal } from "@/store/useAppStore";
 import { CONTRACT_ADDRESS, SILENTVOTE_ABI } from "@/lib/contract";
@@ -14,12 +14,14 @@ interface ProposalCardProps {
 
 export function ProposalCard({ proposal }: ProposalCardProps) {
   const { address } = useAccount();
+  const publicClient = usePublicClient();
   const { addUserVote, updateProposal, setCurrentOperation, userVotes, fhevmStatus } = useAppStore();
   const [timeLeft, setTimeLeft] = useState("");
   const [isExpired, setIsExpired] = useState(false);
   const [isVoting, setIsVoting] = useState(false);
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [pendingDecrypt, setPendingDecrypt] = useState(false);
+  const [localDecrypted, setLocalDecrypted] = useState<{ yes: number; no: number } | null>(null);
 
   // For voting
   const { writeContract, data: hash, isPending, reset } = useWriteContract();
@@ -29,16 +31,27 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
   const { writeContract: writeAllowDecrypt, data: allowHash, isPending: isAllowPending, reset: resetAllow } = useWriteContract();
   const { isLoading: isAllowConfirming, isSuccess: isAllowSuccess } = useWaitForTransactionReceipt({ hash: allowHash });
 
-  // Read proposal handles for decryption (available after voting ends)
-  const { data: handles } = useReadContract({
+  // Read proposal handles for decryption
+  const { data: handles, refetch: refetchHandles } = useReadContract({
     address: CONTRACT_ADDRESS as `0x${string}`,
     abi: SILENTVOTE_ABI,
     functionName: "getProposalHandles",
     args: [BigInt(proposal.id)],
-    query: { enabled: isExpired && proposal.status !== 2 }
+    query: { enabled: isExpired }
   });
 
   const hasVoted = userVotes.some((v) => v.proposalId === proposal.id);
+
+  // Load cached decryption result from localStorage
+  useEffect(() => {
+    const cached = localStorage.getItem(`silentvote_result_${proposal.id}`);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        setLocalDecrypted(parsed);
+      } catch {}
+    }
+  }, [proposal.id]);
 
   // Timer
   useEffect(() => {
@@ -94,8 +107,8 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
     setCurrentOperation("Decrypting results", 3);
     
     try {
-      // Read fresh handles
-      const freshHandles = handles as [string, string];
+      // Refetch handles to get fresh data
+      const { data: freshHandles } = await refetchHandles();
       
       if (!freshHandles || freshHandles[0] === "0x0000000000000000000000000000000000000000000000000000000000000000") {
         toast.error("No votes to decrypt");
@@ -104,17 +117,31 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         return;
       }
 
-      const [yesHandle, noHandle] = freshHandles;
+      const [yesHandle, noHandle] = freshHandles as [string, string];
+      
+      console.log("Decrypting handles:", { yesHandle, noHandle });
+      
       const { values } = await requestPublicDecryption([yesHandle, noHandle]);
+      
+      console.log("Decryption result:", values);
 
+      const yesVotes = Number(values[0]);
+      const noVotes = Number(values[1]);
+
+      // Save to localStorage for persistence
+      localStorage.setItem(`silentvote_result_${proposal.id}`, JSON.stringify({ yes: yesVotes, no: noVotes }));
+      setLocalDecrypted({ yes: yesVotes, no: noVotes });
+
+      // Update store
       updateProposal(proposal.id, { 
         status: 2, 
-        decryptedYes: Number(values[0]), 
-        decryptedNo: Number(values[1]) 
+        decryptedYes: yesVotes, 
+        decryptedNo: noVotes 
       });
 
       toast.success("Results ready!");
     } catch (error: any) {
+      console.error("Decryption error:", error);
       const msg = error.message || "";
       if (msg.includes("520") || msg.includes("down")) {
         toast.error("Zama relayer is down (520)");
@@ -173,9 +200,9 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
 
   /**
    * View results flow:
-   * 1. Call allowDecryption() on contract to mark handles as publicly decryptable
-   * 2. Wait for tx confirmation (handled by useEffect)
-   * 3. Call relayer to get decrypted values (performDecryption)
+   * 1. Check on-chain status
+   * 2. If Active (0) -> call allowDecryption (needs gas)
+   * 3. If PendingDecryption (1) or after allowDecryption -> call relayer directly (no gas)
    */
   const handleViewResults = async () => {
     if (!address) {
@@ -189,11 +216,46 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
     }
 
     setIsDecrypting(true);
-    setPendingDecrypt(true);
-    setCurrentOperation("Signing transaction", 1);
+    setCurrentOperation("Checking status", 1);
     
     try {
-      // Call allowDecryption on contract
+      // Read current on-chain status
+      const onchainData = await publicClient?.readContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        abi: SILENTVOTE_ABI,
+        functionName: "getProposal",
+        args: [BigInt(proposal.id)],
+      }) as [string, string, bigint, number, bigint, bigint];
+
+      const onchainStatus = Number(onchainData[3]);
+      
+      console.log("On-chain status:", onchainStatus);
+
+      if (onchainStatus === 2) {
+        // Already decrypted on-chain, just read the values
+        const yesVotes = Number(onchainData[4]);
+        const noVotes = Number(onchainData[5]);
+        
+        localStorage.setItem(`silentvote_result_${proposal.id}`, JSON.stringify({ yes: yesVotes, no: noVotes }));
+        setLocalDecrypted({ yes: yesVotes, no: noVotes });
+        updateProposal(proposal.id, { status: 2, decryptedYes: yesVotes, decryptedNo: noVotes });
+        
+        toast.success("Results loaded!");
+        setIsDecrypting(false);
+        setCurrentOperation(null);
+        return;
+      }
+
+      if (onchainStatus === 1) {
+        // Already pending decryption, just call relayer (no gas needed)
+        performDecryption();
+        return;
+      }
+
+      // Status is 0 (Active), need to call allowDecryption first
+      setCurrentOperation("Preparing decryption (gas required)", 2);
+      setPendingDecrypt(true);
+      
       writeAllowDecrypt({
         address: CONTRACT_ADDRESS as `0x${string}`,
         abi: SILENTVOTE_ABI,
@@ -201,10 +263,13 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         args: [BigInt(proposal.id)],
         gas: BigInt(3000000),
       });
+
     } catch (error: any) {
+      console.error("View results error:", error);
       const msg = error.message || "";
-      if (msg.includes("Not active")) {
-        // Already called allowDecryption before, just decrypt directly
+      
+      if (msg.includes("Not active") || msg.includes("Voting not ended")) {
+        // Status check failed but voting ended, try direct decrypt
         performDecryption();
       } else if (msg.includes("rejected")) {
         toast.error("Transaction rejected");
@@ -227,8 +292,14 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
     }
   }, [isAllowConfirming, pendingDecrypt]);
 
-  const totalVotes = proposal.decryptedYes + proposal.decryptedNo;
-  const yesPercent = totalVotes > 0 ? (proposal.decryptedYes / totalVotes) * 100 : 50;
+  // Use local decrypted values if available, otherwise use proposal values
+  const displayYes = localDecrypted?.yes ?? proposal.decryptedYes;
+  const displayNo = localDecrypted?.no ?? proposal.decryptedNo;
+  const isDecryptedLocally = localDecrypted !== null;
+  const showResults = proposal.status === 2 || isDecryptedLocally;
+
+  const totalVotes = displayYes + displayNo;
+  const yesPercent = totalVotes > 0 ? (displayYes / totalVotes) * 100 : 50;
 
   // Format date from endTime (subtract duration to get creation time approximation)
   const createdDate = new Date(proposal.endTime - 5 * 60 * 1000); // Assume 5min default
@@ -260,7 +331,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         {proposal.title}
       </h3>
 
-      {proposal.status === 2 ? (
+      {showResults ? (
         /* Decrypted Results */
         <div className="space-y-3">
           <div className="relative h-8 bg-void-800 rounded-lg overflow-hidden">
@@ -271,20 +342,22 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
               className="absolute inset-y-0 left-0 bg-gradient-to-r from-frost-600 to-frost-500"
             />
             <div className="absolute inset-0 flex items-center justify-between px-3 text-sm">
-              <span className="text-sand-100">Yes: {proposal.decryptedYes}</span>
-              <span className="text-sand-100">No: {proposal.decryptedNo}</span>
+              <span className="text-sand-100">Yes: {displayYes}</span>
+              <span className="text-sand-100">No: {displayNo}</span>
             </div>
           </div>
           <p className="text-center text-sand-400 text-sm">
-            {proposal.decryptedYes > proposal.decryptedNo
+            {displayYes > displayNo
               ? "✓ Passed"
-              : proposal.decryptedYes < proposal.decryptedNo
+              : displayYes < displayNo
               ? "✗ Rejected"
+              : totalVotes === 0 
+              ? "No votes"
               : "— Tied"}
           </p>
         </div>
       ) : isExpired ? (
-        /* Ended - View Results (no gas needed!) */
+        /* Ended - View Results */
         <div className="flex justify-center">
           <motion.button
             whileHover={{ scale: 1.02 }}

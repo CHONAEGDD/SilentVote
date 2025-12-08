@@ -7,6 +7,8 @@ export async function POST(request: NextRequest) {
   try {
     const { handles } = await request.json();
     
+    console.log("Decrypt request for handles:", handles);
+    
     const response = await fetch(`${RELAYER_URL}/v1/public-decrypt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -18,6 +20,9 @@ export async function POST(request: NextRequest) {
     });
 
     const responseText = await response.text();
+    
+    console.log("Relayer response status:", response.status);
+    console.log("Relayer response body:", responseText);
 
     if (!response.ok) {
       return NextResponse.json(
@@ -26,8 +31,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return NextResponse.json(JSON.parse(responseText));
+    const result = JSON.parse(responseText);
+    
+    // Log the parsed result for debugging
+    console.log("Parsed relayer result:", JSON.stringify(result, null, 2));
+
+    return NextResponse.json(result);
   } catch (error: any) {
+    console.error("Decrypt API error:", error);
     return NextResponse.json(
       { error: error.message || "Decryption failed" },
       { status: 500 }

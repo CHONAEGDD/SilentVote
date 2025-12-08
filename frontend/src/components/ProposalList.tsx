@@ -20,7 +20,7 @@ export function ProposalList() {
     functionName: "proposalCount",
   });
 
-  // Sync proposals from chain
+  // Sync proposals from chain (preserving local decryption results)
   const syncFromChain = useCallback(async () => {
     if (!publicClient || !proposalCount) return;
 
@@ -44,14 +44,29 @@ export function ProposalList() {
             args: [BigInt(id)],
           }) as [string, string, bigint, number, bigint, bigint];
 
+          // Check for locally cached decryption result
+          let decryptedYes = Number(data[4]);
+          let decryptedNo = Number(data[5]);
+          let status = Number(data[3]);
+
+          const cached = localStorage.getItem(`silentvote_result_${id}`);
+          if (cached) {
+            try {
+              const parsed = JSON.parse(cached);
+              decryptedYes = parsed.yes;
+              decryptedNo = parsed.no;
+              status = 2; // Mark as decrypted if we have cached result
+            } catch {}
+          }
+
           onchainProposals.push({
             id,
             title: data[0],
             creator: data[1],
             endTime: Number(data[2]) * 1000, // Convert seconds to ms
-            status: Number(data[3]),
-            decryptedYes: Number(data[4]),
-            decryptedNo: Number(data[5]),
+            status,
+            decryptedYes,
+            decryptedNo,
           });
         } catch {
           // Skip invalid proposals
