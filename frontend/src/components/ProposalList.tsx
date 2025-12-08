@@ -20,7 +20,7 @@ export function ProposalList() {
     functionName: "proposalCount",
   });
 
-  // Sync proposals from chain (use on-chain status as source of truth)
+  // Sync proposals from chain (pure on-chain data, no caching)
   const syncFromChain = useCallback(async () => {
     if (!publicClient || !proposalCount) return;
 
@@ -44,33 +44,14 @@ export function ProposalList() {
             args: [BigInt(id)],
           }) as [string, string, bigint, number, bigint, bigint];
 
-          const status = Number(data[3]);
-          let decryptedYes = Number(data[4]);
-          let decryptedNo = Number(data[5]);
-
-          // Only use cache if status is PendingDecryption (1) and cache has actual votes
-          if (status === 1) {
-            const cached = localStorage.getItem(`silentvote_result_${id}`);
-            if (cached) {
-              try {
-                const parsed = JSON.parse(cached);
-                // Only use cache if it has actual votes
-                if (parsed.yes > 0 || parsed.no > 0) {
-                  decryptedYes = parsed.yes;
-                  decryptedNo = parsed.no;
-                }
-              } catch {}
-            }
-          }
-
           onchainProposals.push({
             id,
             title: data[0],
             creator: data[1],
             endTime: Number(data[2]) * 1000, // Convert seconds to ms
-            status, // Always use on-chain status
-            decryptedYes,
-            decryptedNo,
+            status: Number(data[3]),
+            decryptedYes: Number(data[4]),
+            decryptedNo: Number(data[5]),
           });
         } catch {
           // Skip invalid proposals
