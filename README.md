@@ -21,7 +21,7 @@ Traditional on-chain voting exposes individual choices, enabling vote buying, co
 
 ## Contract
 
-**Sepolia**: [`0x600474A6a1F28A69F97CE988e593b99b025cDF68`](https://sepolia.etherscan.io/address/0x600474A6a1F28A69F97CE988e593b99b025cDF68#code)
+**Sepolia**: [`0x72327D579777A230dc2cd7adDa73F509d3c4D43d`](https://sepolia.etherscan.io/address/0x72327D579777A230dc2cd7adDa73F509d3c4D43d#code)
 
 ## Tech Stack
 

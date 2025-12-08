@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract } from "wagmi";
 import { motion } from "framer-motion";
 import { useAppStore, type Proposal } from "@/store/useAppStore";
@@ -19,9 +19,15 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
   const [isExpired, setIsExpired] = useState(false);
   const [isVoting, setIsVoting] = useState(false);
   const [isDecrypting, setIsDecrypting] = useState(false);
+  const [pendingDecrypt, setPendingDecrypt] = useState(false);
 
+  // For voting
   const { writeContract, data: hash, isPending, reset } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+
+  // For allowDecryption
+  const { writeContract: writeAllowDecrypt, data: allowHash, isPending: isAllowPending, reset: resetAllow } = useWriteContract();
+  const { isLoading: isAllowConfirming, isSuccess: isAllowSuccess } = useWaitForTransactionReceipt({ hash: allowHash });
 
   // Read proposal handles for decryption (available after voting ends)
   const { data: handles } = useReadContract({
@@ -74,6 +80,55 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
     }
   }, [isSuccess, isVoting, setCurrentOperation, reset]);
 
+  // Handle allowDecryption success -> then decrypt
+  useEffect(() => {
+    if (isAllowSuccess && pendingDecrypt) {
+      setPendingDecrypt(false);
+      resetAllow();
+      // Now call relayer for decryption
+      performDecryption();
+    }
+  }, [isAllowSuccess, pendingDecrypt]);
+
+  const performDecryption = async () => {
+    setCurrentOperation("Decrypting results", 3);
+    
+    try {
+      // Read fresh handles
+      const freshHandles = handles as [string, string];
+      
+      if (!freshHandles || freshHandles[0] === "0x0000000000000000000000000000000000000000000000000000000000000000") {
+        toast.error("No votes to decrypt");
+        setIsDecrypting(false);
+        setCurrentOperation(null);
+        return;
+      }
+
+      const [yesHandle, noHandle] = freshHandles;
+      const { values } = await requestPublicDecryption([yesHandle, noHandle]);
+
+      updateProposal(proposal.id, { 
+        status: 2, 
+        decryptedYes: Number(values[0]), 
+        decryptedNo: Number(values[1]) 
+      });
+
+      toast.success("Results ready!");
+    } catch (error: any) {
+      const msg = error.message || "";
+      if (msg.includes("520") || msg.includes("down")) {
+        toast.error("Zama relayer is down (520)");
+      } else if (msg.includes("timeout") || msg.includes("Timeout")) {
+        toast.error("Zama relayer not responding (timeout)");
+      } else {
+        toast.error("Decryption failed: " + msg.slice(0, 30));
+      }
+    } finally {
+      setIsDecrypting(false);
+      setCurrentOperation(null);
+    }
+  };
+
   const handleVote = async (choice: "yes" | "no") => {
     if (hasVoted || !address) {
       toast.error("Already voted or not connected");
@@ -117,7 +172,10 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
   };
 
   /**
-   * View results - decrypt via relayer
+   * View results flow:
+   * 1. Call allowDecryption() on contract to mark handles as publicly decryptable
+   * 2. Wait for tx confirmation (handled by useEffect)
+   * 3. Call relayer to get decrypted values (performDecryption)
    */
   const handleViewResults = async () => {
     if (!address) {
@@ -131,35 +189,43 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
     }
 
     setIsDecrypting(true);
-    setCurrentOperation("Decrypting results", 1);
+    setPendingDecrypt(true);
+    setCurrentOperation("Signing transaction", 1);
     
     try {
-      const [yesHandle, noHandle] = handles as [string, string];
-      const { values } = await requestPublicDecryption([yesHandle, noHandle]);
-
-      updateProposal(proposal.id, { 
-        status: 2, 
-        decryptedYes: Number(values[0]), 
-        decryptedNo: Number(values[1]) 
+      // Call allowDecryption on contract
+      writeAllowDecrypt({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        abi: SILENTVOTE_ABI,
+        functionName: "allowDecryption",
+        args: [BigInt(proposal.id)],
+        gas: BigInt(3000000),
       });
-
-      toast.success("Results ready!");
     } catch (error: any) {
       const msg = error.message || "";
-      if (msg.includes("520") || msg.includes("down")) {
-        toast.error("Zama relayer is down (520)");
-      } else if (msg.includes("timeout") || msg.includes("Timeout")) {
-        toast.error("Zama relayer not responding (timeout)");
-      } else if (msg.includes("not allowed")) {
-        toast.error("Decryption not allowed");
+      if (msg.includes("Not active")) {
+        // Already called allowDecryption before, just decrypt directly
+        performDecryption();
+      } else if (msg.includes("rejected")) {
+        toast.error("Transaction rejected");
+        setIsDecrypting(false);
+        setPendingDecrypt(false);
+        setCurrentOperation(null);
       } else {
-        toast.error("Decryption failed: " + msg.slice(0, 30));
+        toast.error("Failed: " + msg.slice(0, 40));
+        setIsDecrypting(false);
+        setPendingDecrypt(false);
+        setCurrentOperation(null);
       }
-    } finally {
-      setIsDecrypting(false);
-      setCurrentOperation(null);
     }
   };
+
+  // Update operation status when allowDecryption is confirming
+  useEffect(() => {
+    if (isAllowConfirming && pendingDecrypt) {
+      setCurrentOperation("Waiting for confirmation", 2);
+    }
+  }, [isAllowConfirming, pendingDecrypt]);
 
   const totalVotes = proposal.decryptedYes + proposal.decryptedNo;
   const yesPercent = totalVotes > 0 ? (proposal.decryptedYes / totalVotes) * 100 : 50;

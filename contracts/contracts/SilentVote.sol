@@ -97,12 +97,12 @@ contract SilentVote is ZamaEthereumConfig {
         proposal.yesVotes = FHE.select(isYesVote, FHE.add(proposal.yesVotes, FHE.asEuint64(1)), proposal.yesVotes);
         proposal.noVotes = FHE.select(isYesVote, proposal.noVotes, FHE.add(proposal.noVotes, FHE.asEuint64(1)));
         
+        // Grant contract access to new ciphertext handles
         FHE.allowThis(proposal.yesVotes);
         FHE.allowThis(proposal.noVotes);
         
-        // Pre-authorize public decryption - anyone can decrypt after voting ends
-        FHE.makePubliclyDecryptable(proposal.yesVotes);
-        FHE.makePubliclyDecryptable(proposal.noVotes);
+        // NOTE: Do NOT call makePubliclyDecryptable here!
+        // It must be called AFTER all votes are in, via allowDecryption()
 
         hasVoted[_proposalId][msg.sender] = true;
 
