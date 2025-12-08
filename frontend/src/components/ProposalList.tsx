@@ -14,7 +14,7 @@ export function ProposalList() {
   const publicClient = usePublicClient();
 
   // Read proposal count from chain
-  const { data: proposalCount, refetch } = useReadContract({
+  const { data: proposalCount, refetch, isError, isFetched } = useReadContract({
     address: CONTRACT_ADDRESS as `0x${string}`,
     abi: SILENTVOTE_ABI,
     functionName: "proposalCount",
@@ -22,9 +22,13 @@ export function ProposalList() {
 
   // Sync proposals from chain (pure on-chain data, no caching)
   const syncFromChain = useCallback(async () => {
-    if (!publicClient || !proposalCount) return;
+    if (!publicClient) {
+      setIsLoading(false);
+      return;
+    }
 
-    const count = Number(proposalCount);
+    // If count is 0 or undefined after fetch, show empty state
+    const count = Number(proposalCount || 0);
     if (count === 0) {
       setProposals([]);
       setIsLoading(false);
@@ -66,10 +70,20 @@ export function ProposalList() {
     }
   }, [publicClient, proposalCount, setProposals]);
 
-  // Initial sync and periodic refresh
+  // Stop loading if fetch completed or errored
   useEffect(() => {
-    syncFromChain();
-  }, [syncFromChain]);
+    if (isFetched || isError) {
+      syncFromChain();
+    }
+  }, [isFetched, isError, syncFromChain]);
+
+  // Timeout to stop loading after 5 seconds
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (isLoading) setIsLoading(false);
+    }, 5000);
+    return () => clearTimeout(timeout);
+  }, [isLoading]);
 
   // Refresh every 10 seconds
   useEffect(() => {
