@@ -1,24 +1,42 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
+import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { MockSilentVote } from "../typechain-types";
+import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 
 /**
  * SilentVote Contract Tests
  * 
- * IMPORTANT: FHEVM contracts require Zama's infrastructure for FHE operations.
- * - Local tests: Input validation, interface checks
- * - Sepolia tests: Full FHE flow (encrypt, compute, decrypt)
+ * Test Strategy:
+ * - MockSilentVote: Tests business logic without FHE dependencies
+ * - SilentVote Interface: Validates ABI compatibility
+ * - Sepolia Integration: Full FHE flow (documented, manual)
  * 
- * The contract has been deployed and tested on Sepolia:
+ * Deployed Contract:
  * https://sepolia.etherscan.io/address/0x600474A6a1F28A69F97CE988e593b99b025cDF68
  */
-describe("SilentVote", function () {
 
+describe("SilentVote", function () {
+  let mockContract: MockSilentVote;
+  let owner: SignerWithAddress;
+  let voter1: SignerWithAddress;
+  let voter2: SignerWithAddress;
+  let voter3: SignerWithAddress;
+
+  beforeEach(async function () {
+    [owner, voter1, voter2, voter3] = await ethers.getSigners();
+    const MockFactory = await ethers.getContractFactory("MockSilentVote");
+    mockContract = await MockFactory.deploy();
+    await mockContract.waitForDeployment();
+  });
+
+  // ==================== CONTRACT INTERFACE ====================
+  
   describe("Contract Interface", function () {
     it("Should have correct function signatures", async function () {
       const SilentVoteFactory = await ethers.getContractFactory("SilentVote");
       const iface = SilentVoteFactory.interface;
       
-      // Check all expected functions exist
       expect(iface.getFunction("createProposal")).to.not.be.null;
       expect(iface.getFunction("vote")).to.not.be.null;
       expect(iface.getFunction("allowDecryption")).to.not.be.null;
@@ -39,131 +57,386 @@ describe("SilentVote", function () {
       expect(iface.getEvent("DecryptionReady")).to.not.be.null;
       expect(iface.getEvent("ResultsDecrypted")).to.not.be.null;
     });
+  });
 
-    it("Should encode createProposal correctly", async function () {
-      const SilentVoteFactory = await ethers.getContractFactory("SilentVote");
-      const encoded = SilentVoteFactory.interface.encodeFunctionData(
-        "createProposal",
-        ["Test Proposal", 5]
-      );
+  // ==================== PROPOSAL CREATION ====================
+
+  describe("Proposal Creation", function () {
+    it("Should create proposal with valid parameters", async function () {
+      const tx = await mockContract.createProposal("Test Proposal", 5);
+      const receipt = await tx.wait();
       
-      expect(encoded).to.be.a("string");
-      expect(encoded.startsWith("0x")).to.be.true;
+      expect(await mockContract.proposalCount()).to.equal(1);
+      
+      const proposal = await mockContract.getProposal(1);
+      expect(proposal.title).to.equal("Test Proposal");
+      expect(proposal.creator).to.equal(owner.address);
+      expect(proposal.status).to.equal(0); // Active
     });
 
-    it("Should encode vote correctly", async function () {
-      const SilentVoteFactory = await ethers.getContractFactory("SilentVote");
-      const mockHandle = ethers.zeroPadValue("0x01", 32);
-      const mockProof = "0x1234";
+    it("Should emit ProposalCreated event", async function () {
+      await expect(mockContract.createProposal("Event Test", 10))
+        .to.emit(mockContract, "ProposalCreated");
       
-      const encoded = SilentVoteFactory.interface.encodeFunctionData(
-        "vote",
-        [1, mockHandle, mockProof]
-      );
+      // Verify event args separately due to timestamp precision
+      const proposal = await mockContract.getProposal(1);
+      expect(proposal.title).to.equal("Event Test");
+      expect(proposal.creator).to.equal(owner.address);
+    });
+
+    it("Should reject empty title", async function () {
+      await expect(mockContract.createProposal("", 5))
+        .to.be.revertedWith("Empty title");
+    });
+
+    it("Should reject duration < 1 minute", async function () {
+      await expect(mockContract.createProposal("Test", 0))
+        .to.be.revertedWith("Invalid duration");
+    });
+
+    it("Should reject duration > 30 days (43200 minutes)", async function () {
+      await expect(mockContract.createProposal("Test", 43201))
+        .to.be.revertedWith("Invalid duration");
+    });
+
+    it("Should accept minimum duration (1 minute)", async function () {
+      await expect(mockContract.createProposal("Min Duration", 1))
+        .to.not.be.reverted;
+    });
+
+    it("Should accept maximum duration (30 days)", async function () {
+      await expect(mockContract.createProposal("Max Duration", 43200))
+        .to.not.be.reverted;
+    });
+
+    it("Should increment proposalCount correctly", async function () {
+      expect(await mockContract.proposalCount()).to.equal(0);
       
-      expect(encoded).to.be.a("string");
-      expect(encoded.startsWith("0x")).to.be.true;
+      await mockContract.createProposal("First", 5);
+      expect(await mockContract.proposalCount()).to.equal(1);
+      
+      await mockContract.createProposal("Second", 5);
+      expect(await mockContract.proposalCount()).to.equal(2);
+      
+      await mockContract.createProposal("Third", 5);
+      expect(await mockContract.proposalCount()).to.equal(3);
+    });
+
+    it("Should set correct end time", async function () {
+      const durationMinutes = 60;
+      const tx = await mockContract.createProposal("Time Test", durationMinutes);
+      await tx.wait();
+      
+      const proposal = await mockContract.getProposal(1);
+      const expectedEndTime = await time.latest() + durationMinutes * 60;
+      
+      // Allow 1 second tolerance for block time
+      expect(proposal.endTime).to.be.closeTo(expectedEndTime, 1);
     });
   });
 
-  describe("Input Validation (Static Analysis)", function () {
-    it("Should have title length check in createProposal", async function () {
-      const SilentVoteFactory = await ethers.getContractFactory("SilentVote");
-      const bytecode = SilentVoteFactory.bytecode;
-      
-      // Contract should compile with require statements
-      expect(bytecode.length).to.be.greaterThan(0);
+  // ==================== VOTING ====================
+
+  describe("Voting", function () {
+    beforeEach(async function () {
+      await mockContract.createProposal("Vote Test", 60);
     });
 
-    it("Should have duration bounds (1 min to 30 days)", function () {
-      // Document the validation rules
-      const MIN_DURATION = 1; // minutes
-      const MAX_DURATION = 43200; // 30 days in minutes
+    it("Should allow voting on active proposal", async function () {
+      await expect(mockContract.connect(voter1).vote(1, true))
+        .to.emit(mockContract, "VoteCast")
+        .withArgs(1, voter1.address);
+    });
+
+    it("Should track hasVoted correctly", async function () {
+      expect(await mockContract.hasUserVoted(1, voter1.address)).to.be.false;
       
-      expect(MIN_DURATION).to.equal(1);
-      expect(MAX_DURATION).to.equal(30 * 24 * 60);
+      await mockContract.connect(voter1).vote(1, true);
+      
+      expect(await mockContract.hasUserVoted(1, voter1.address)).to.be.true;
+      expect(await mockContract.hasUserVoted(1, voter2.address)).to.be.false;
+    });
+
+    it("Should prevent double voting", async function () {
+      await mockContract.connect(voter1).vote(1, true);
+      
+      await expect(mockContract.connect(voter1).vote(1, false))
+        .to.be.revertedWith("Already voted");
+    });
+
+    it("Should reject voting on non-existent proposal", async function () {
+      await expect(mockContract.connect(voter1).vote(999, true))
+        .to.be.revertedWith("Proposal not found");
+    });
+
+    it("Should reject voting after end time", async function () {
+      // Fast forward past end time
+      await time.increase(61 * 60); // 61 minutes
+      
+      await expect(mockContract.connect(voter1).vote(1, true))
+        .to.be.revertedWith("Voting ended");
+    });
+
+    it("Should allow multiple users to vote", async function () {
+      await mockContract.connect(voter1).vote(1, true);
+      await mockContract.connect(voter2).vote(1, false);
+      await mockContract.connect(voter3).vote(1, true);
+      
+      expect(await mockContract.hasUserVoted(1, voter1.address)).to.be.true;
+      expect(await mockContract.hasUserVoted(1, voter2.address)).to.be.true;
+      expect(await mockContract.hasUserVoted(1, voter3.address)).to.be.true;
+    });
+
+    it("Should correctly check isVotingActive", async function () {
+      expect(await mockContract.isVotingActive(1)).to.be.true;
+      
+      // Fast forward past end time
+      await time.increase(61 * 60);
+      
+      expect(await mockContract.isVotingActive(1)).to.be.false;
     });
   });
 
-  describe("FHE Architecture", function () {
+  // ==================== DECRYPTION FLOW ====================
+
+  describe("Decryption Flow", function () {
+    beforeEach(async function () {
+      await mockContract.createProposal("Decrypt Test", 5);
+      await mockContract.connect(voter1).vote(1, true);
+      await mockContract.connect(voter2).vote(1, true);
+      await mockContract.connect(voter3).vote(1, false);
+    });
+
+    it("Should reject allowDecryption before voting ends", async function () {
+      await expect(mockContract.allowDecryption(1))
+        .to.be.revertedWith("Voting not ended");
+    });
+
+    it("Should allow decryption after voting ends", async function () {
+      await time.increase(6 * 60); // 6 minutes
+      
+      await expect(mockContract.allowDecryption(1))
+        .to.emit(mockContract, "DecryptionReady")
+        .withArgs(1);
+    });
+
+    it("Should update status to PendingDecryption", async function () {
+      await time.increase(6 * 60);
+      await mockContract.allowDecryption(1);
+      
+      const proposal = await mockContract.getProposal(1);
+      expect(proposal.status).to.equal(1); // PendingDecryption
+    });
+
+    it("Should reject allowDecryption on non-existent proposal", async function () {
+      await time.increase(6 * 60);
+      await expect(mockContract.allowDecryption(999))
+        .to.be.revertedWith("Proposal not found");
+    });
+
+    it("Should reject double allowDecryption", async function () {
+      await time.increase(6 * 60);
+      await mockContract.allowDecryption(1);
+      
+      await expect(mockContract.allowDecryption(1))
+        .to.be.revertedWith("Not active");
+    });
+  });
+
+  // ==================== RESULT FINALIZATION ====================
+
+  describe("Result Finalization", function () {
+    beforeEach(async function () {
+      await mockContract.createProposal("Final Test", 5);
+      await mockContract.connect(voter1).vote(1, true);
+      await mockContract.connect(voter2).vote(1, true);
+      await mockContract.connect(voter3).vote(1, false);
+      await time.increase(6 * 60);
+      await mockContract.allowDecryption(1);
+    });
+
+    it("Should finalize results correctly", async function () {
+      await expect(mockContract.finalizeResults(1))
+        .to.emit(mockContract, "ResultsDecrypted")
+        .withArgs(1, 2, 1); // 2 yes, 1 no
+    });
+
+    it("Should update decrypted values", async function () {
+      await mockContract.finalizeResults(1);
+      
+      const proposal = await mockContract.getProposal(1);
+      expect(proposal.decryptedYes).to.equal(2);
+      expect(proposal.decryptedNo).to.equal(1);
+      expect(proposal.status).to.equal(2); // Decrypted
+    });
+
+    it("Should reject finalize when not pending", async function () {
+      await mockContract.finalizeResults(1);
+      
+      await expect(mockContract.finalizeResults(1))
+        .to.be.revertedWith("Not pending");
+    });
+  });
+
+  // ==================== EDGE CASES ====================
+
+  describe("Edge Cases", function () {
+    it("Should handle proposal with no votes", async function () {
+      await mockContract.createProposal("No Votes", 1);
+      await time.increase(2 * 60);
+      await mockContract.allowDecryption(1);
+      await mockContract.finalizeResults(1);
+      
+      const proposal = await mockContract.getProposal(1);
+      expect(proposal.decryptedYes).to.equal(0);
+      expect(proposal.decryptedNo).to.equal(0);
+    });
+
+    it("Should handle all yes votes", async function () {
+      await mockContract.createProposal("All Yes", 1);
+      await mockContract.connect(voter1).vote(1, true);
+      await mockContract.connect(voter2).vote(1, true);
+      await mockContract.connect(voter3).vote(1, true);
+      
+      await time.increase(2 * 60);
+      await mockContract.allowDecryption(1);
+      await mockContract.finalizeResults(1);
+      
+      const proposal = await mockContract.getProposal(1);
+      expect(proposal.decryptedYes).to.equal(3);
+      expect(proposal.decryptedNo).to.equal(0);
+    });
+
+    it("Should handle all no votes", async function () {
+      await mockContract.createProposal("All No", 1);
+      await mockContract.connect(voter1).vote(1, false);
+      await mockContract.connect(voter2).vote(1, false);
+      await mockContract.connect(voter3).vote(1, false);
+      
+      await time.increase(2 * 60);
+      await mockContract.allowDecryption(1);
+      await mockContract.finalizeResults(1);
+      
+      const proposal = await mockContract.getProposal(1);
+      expect(proposal.decryptedYes).to.equal(0);
+      expect(proposal.decryptedNo).to.equal(3);
+    });
+
+    it("Should handle long title", async function () {
+      const longTitle = "A".repeat(200);
+      await expect(mockContract.createProposal(longTitle, 5))
+        .to.not.be.reverted;
+      
+      const proposal = await mockContract.getProposal(1);
+      expect(proposal.title).to.equal(longTitle);
+    });
+
+    it("Should handle multiple proposals independently", async function () {
+      await mockContract.createProposal("Proposal A", 5);
+      await mockContract.createProposal("Proposal B", 5);
+      
+      await mockContract.connect(voter1).vote(1, true);
+      await mockContract.connect(voter1).vote(2, false);
+      
+      expect(await mockContract.hasUserVoted(1, voter1.address)).to.be.true;
+      expect(await mockContract.hasUserVoted(2, voter1.address)).to.be.true;
+    });
+  });
+
+  // ==================== FHE ARCHITECTURE DOCS ====================
+
+  describe("FHE Architecture (Documentation)", function () {
     /**
-     * Documents the FHE operations used in SilentVote:
+     * Documents the FHE operations in actual SilentVote contract:
      * 
-     * ENCRYPTION:
-     * - User input encrypted in browser using @zama-fhe/relayer-sdk
-     * - addBool(choice) creates encrypted boolean
-     * - Returns handle (bytes32) + inputProof (bytes)
+     * ENCRYPTION (Browser):
+     * - fhevm.createEncryptedInput(contract, user)
+     * - input.addBool(choice) 
+     * - input.encrypt() -> {handles[], inputProof}
      * 
-     * ON-CHAIN COMPUTE:
+     * ON-CHAIN (Contract):
      * - FHE.fromExternal() validates encrypted input
      * - FHE.select() conditional increment
      * - FHE.add() encrypted addition
      * - FHE.allowThis() ACL permissions
-     * 
-     * DECRYPTION:
      * - FHE.makePubliclyDecryptable() marks for decryption
-     * - Zama Relayer performs MPC decryption
+     * 
+     * DECRYPTION (Relayer):
+     * - POST /api/decrypt -> Zama Relayer
+     * - MPC decryption of handles
      * - FHE.checkSignatures() verifies KMS proof
      */
-    it("Should document encryption flow", function () {
-      const encryptionSteps = [
+    it("Should document FHE encryption flow", function () {
+      const steps = [
         "1. User selects yes/no in browser",
         "2. fhevm.createEncryptedInput(contract, user)",
         "3. input.addBool(isYes)",
         "4. input.encrypt() -> {handle, inputProof}",
-        "5. Send to contract as externalEbool"
+        "5. Contract receives externalEbool + proof"
       ];
-      expect(encryptionSteps.length).to.equal(5);
+      expect(steps.length).to.equal(5);
     });
 
-    it("Should document on-chain FHE operations", function () {
-      const fheOps = [
-        "FHE.fromExternal(_encryptedVote, _inputProof) -> ebool",
-        "FHE.select(cond, trueVal, falseVal) -> euint64",
-        "FHE.add(a, b) -> euint64",
-        "FHE.asEuint64(plaintext) -> euint64",
-        "FHE.allowThis(ciphertext) - Grant contract access",
-        "FHE.makePubliclyDecryptable(ciphertext) - Allow decryption"
+    it("Should document FHE on-chain operations", function () {
+      const ops = [
+        "FHE.fromExternal(_encryptedVote, _inputProof)",
+        "FHE.select(isYes, trueVal, falseVal)",
+        "FHE.add(counter, FHE.asEuint64(1))",
+        "FHE.allowThis(ciphertext)",
+        "FHE.makePubliclyDecryptable(ciphertext)"
       ];
-      expect(fheOps.length).to.equal(6);
+      expect(ops.length).to.equal(5);
     });
 
-    it("Should document decryption flow", function () {
-      const decryptionSteps = [
-        "1. Frontend reads handles via getProposalHandles()",
+    it("Should document FHE decryption flow", function () {
+      const steps = [
+        "1. getProposalHandles() returns bytes32 handles",
         "2. POST to /api/decrypt (proxy to Zama Relayer)",
         "3. Relayer performs MPC decryption",
-        "4. Returns clearValues for each handle",
-        "5. Frontend displays results (no on-chain tx needed)"
+        "4. Returns clearValues for display",
+        "5. (Optional) submitDecryptedResults with KMS proof"
       ];
-      expect(decryptionSteps.length).to.equal(5);
+      expect(steps.length).to.equal(5);
     });
   });
 
+  // ==================== SECURITY PROPERTIES ====================
+
   describe("Security Properties", function () {
-    it("Should never expose plaintext votes", function () {
-      // Document the privacy guarantees
-      const privacyGuarantees = {
-        voteEncryption: "Browser-side using fhevmjs",
-        onChainStorage: "euint64 (encrypted) for vote counts",
-        eventPrivacy: "VoteCast only logs voter address, not choice",
-        decryptionTiming: "Only after voting ends",
-        decryptionScope: "Aggregate counts only, not individual votes"
-      };
+    it("Should enforce one vote per address per proposal", async function () {
+      await mockContract.createProposal("Security Test", 60);
       
-      expect(privacyGuarantees.voteEncryption).to.include("Browser");
-      expect(privacyGuarantees.onChainStorage).to.include("encrypted");
+      await mockContract.connect(voter1).vote(1, true);
+      await expect(mockContract.connect(voter1).vote(1, true))
+        .to.be.revertedWith("Already voted");
+      await expect(mockContract.connect(voter1).vote(1, false))
+        .to.be.revertedWith("Already voted");
     });
 
-    it("Should prevent double voting", function () {
-      // Document the mechanism
-      const doubleVotePrevention = {
-        storage: "mapping(uint256 => mapping(address => bool)) hasVoted",
-        check: "require(!hasVoted[proposalId][msg.sender])",
-        timing: "Checked before FHE operations"
-      };
+    it("Should enforce time-based voting restrictions", async function () {
+      await mockContract.createProposal("Time Security", 1);
       
-      expect(doubleVotePrevention.check).to.include("require");
+      // Can vote before end
+      await mockContract.connect(voter1).vote(1, true);
+      
+      // Cannot vote after end
+      await time.increase(2 * 60);
+      await expect(mockContract.connect(voter2).vote(1, true))
+        .to.be.revertedWith("Voting ended");
+    });
+
+    it("Should prevent decryption before voting ends", async function () {
+      await mockContract.createProposal("Early Decrypt", 60);
+      
+      await expect(mockContract.allowDecryption(1))
+        .to.be.revertedWith("Voting not ended");
+    });
+
+    it("Should track creator correctly", async function () {
+      await mockContract.connect(voter1).createProposal("Creator Test", 5);
+      
+      const proposal = await mockContract.getProposal(1);
+      expect(proposal.creator).to.equal(voter1.address);
     });
   });
 });
@@ -172,12 +445,14 @@ describe("SilentVote", function () {
  * SEPOLIA INTEGRATION TEST RESULTS
  * ================================
  * Contract: 0x600474A6a1F28A69F97CE988e593b99b025cDF68
+ * Verified: https://sepolia.etherscan.io/address/0x600474A6a1F28A69F97CE988e593b99b025cDF68#code
  * 
- * Manual tests performed:
+ * Manual FHE tests performed:
  * ✅ createProposal - Creates proposal with FHE-initialized counters
- * ✅ vote - Accepts encrypted votes, increments counters
- * ✅ getProposalHandles - Returns valid FHE handles
- * ✅ Public decryption via Zama Relayer
+ * ✅ vote - Accepts encrypted votes via externalEbool + inputProof
+ * ✅ getProposalHandles - Returns valid FHE handles (bytes32)
+ * ✅ Public decryption via Zama Relayer API
  * ✅ Double vote prevention working
  * ✅ Time-based voting restriction working
+ * ✅ FHE.select() conditional accumulation verified
  */
