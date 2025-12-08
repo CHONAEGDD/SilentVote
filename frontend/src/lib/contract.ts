@@ -130,4 +130,3 @@ export const SILENTVOTE_ABI = [
     "type": "event"
   }
 ] as const;
-

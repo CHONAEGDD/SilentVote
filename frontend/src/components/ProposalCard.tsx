@@ -107,12 +107,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
       }
 
       const [yesHandle, noHandle] = freshHandles as [string, string];
-      
-      console.log("Decrypting handles:", { yesHandle, noHandle });
-      
       const { values } = await requestPublicDecryption([yesHandle, noHandle]);
-      
-      console.log("Decryption result:", values);
 
       const yesVotes = Number(values[0]);
       const noVotes = Number(values[1]);
@@ -128,7 +123,6 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
 
       toast.success(`Results: Yes ${yesVotes}, No ${noVotes}`);
     } catch (error: any) {
-      console.error("Decryption error:", error);
       const msg = error.message || "";
       if (msg.includes("520") || msg.includes("down")) {
         toast.error("Zama relayer is down (520)");
@@ -213,9 +207,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
       });
 
     } catch (error: any) {
-      console.error("View results error:", error);
       const msg = error.message || "";
-      
       if (msg.includes("rejected")) {
         toast.error("Transaction rejected");
       } else {

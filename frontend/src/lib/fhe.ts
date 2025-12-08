@@ -84,9 +84,6 @@ export async function encryptVote(
   };
 }
 
-// Keep old function name for backward compatibility
-export const encryptBool = encryptVote;
-
 /**
  * Request public decryption of handles via local API proxy (avoids CORS)
  * Returns decrypted values - NO RETRY, fail fast
@@ -98,8 +95,6 @@ export async function requestPublicDecryption(
   const timeout = setTimeout(() => controller.abort(), 30000);
   
   try {
-    console.log("Requesting decryption for handles:", handles);
-    
     const response = await fetch("/api/decrypt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -111,7 +106,6 @@ export async function requestPublicDecryption(
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Decrypt API error response:", errorText);
       if (errorText.includes("520") || errorText.includes("Web server")) {
         throw new Error("Zama Relayer is down");
       } else if (errorText.includes("not allowed")) {
@@ -122,85 +116,40 @@ export async function requestPublicDecryption(
     }
 
     const result = await response.json();
-    console.log("Decrypt API result:", JSON.stringify(result, null, 2));
-    
     const values: bigint[] = [];
     
-    // Format 1: { response: [{ decrypted_value: "hex string with concatenated values" }] }
-    // This is the current Zama Relayer format
+    // Format: { response: [{ decrypted_value: "hex string" }] } - Zama Relayer format
     if (result.response && Array.isArray(result.response) && result.response[0]?.decrypted_value) {
       const hexStr = result.response[0].decrypted_value;
-      console.log("Parsing concatenated hex values:", hexStr);
-      
-      // Each value is 32 bytes = 64 hex characters
-      const chunkSize = 64;
+      const chunkSize = 64; // 32 bytes = 64 hex chars
       for (let i = 0; i < handles.length; i++) {
-        const start = i * chunkSize;
-        const chunk = hexStr.slice(start, start + chunkSize);
-        if (chunk) {
-          const val = BigInt("0x" + chunk);
-          console.log(`Value ${i}: 0x${chunk} = ${val.toString()}`);
-          values.push(val);
-        } else {
-          values.push(BigInt(0));
-        }
+        const chunk = hexStr.slice(i * chunkSize, (i + 1) * chunkSize);
+        values.push(chunk ? BigInt("0x" + chunk) : BigInt(0));
       }
-    }
-    // Format 2: { clearValues: { "0x...handle": "value", ... } }
-    else if (result.clearValues) {
+    } else if (result.clearValues) {
       for (const handle of handles) {
         const val = result.clearValues[handle];
-        console.log(`Handle ${handle} -> value:`, val);
-        if (val !== undefined && val !== null) {
-          values.push(BigInt(val));
-        } else {
-          values.push(BigInt(0));
-        }
+        values.push(val !== undefined && val !== null ? BigInt(val) : BigInt(0));
       }
-    } 
-    // Format 3: { decryptedValues: { "0x...handle": value, ... } }
-    else if (result.decryptedValues) {
+    } else if (result.decryptedValues) {
       for (const handle of handles) {
         const val = result.decryptedValues[handle];
-        console.log(`Handle ${handle} -> decryptedValue:`, val);
-        if (val !== undefined && val !== null) {
-          values.push(BigInt(val));
-        } else {
-          values.push(BigInt(0));
-        }
+        values.push(val !== undefined && val !== null ? BigInt(val) : BigInt(0));
       }
-    } 
-    // Format 4: { values: [value1, value2, ...] }
-    else if (Array.isArray(result.values)) {
-      for (const val of result.values) {
-        values.push(BigInt(val));
-      }
-    } 
-    // Format 5: [value1, value2, ...]
-    else if (Array.isArray(result)) {
-      for (const val of result) {
-        values.push(BigInt(val));
-      }
-    } 
-    // Fallback: direct handle lookup
-    else {
+    } else if (Array.isArray(result.values)) {
+      for (const val of result.values) values.push(BigInt(val));
+    } else if (Array.isArray(result)) {
+      for (const val of result) values.push(BigInt(val));
+    } else {
       for (const handle of handles) {
         const val = result[handle];
-        console.log(`Direct lookup ${handle} ->`, val);
-        if (val !== undefined && val !== null) {
-          values.push(BigInt(val));
-        } else {
-          values.push(BigInt(0));
-        }
+        values.push(val !== undefined && val !== null ? BigInt(val) : BigInt(0));
       }
     }
-    
-    console.log("Final parsed values:", values.map(v => v.toString()));
-    
+
     return { values };
   } catch (error: any) {
     clearTimeout(timeout);
-    console.error("requestPublicDecryption error:", error);
     if (error.name === 'AbortError') {
       throw new Error("Decryption timeout (30s)");
     }
