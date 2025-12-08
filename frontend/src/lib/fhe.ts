@@ -126,9 +126,28 @@ export async function requestPublicDecryption(
     
     const values: bigint[] = [];
     
-    // Try different response formats from Zama Relayer
-    if (result.clearValues) {
-      // Format: { clearValues: { "0x...handle": "value", ... } }
+    // Format 1: { response: [{ decrypted_value: "hex string with concatenated values" }] }
+    // This is the current Zama Relayer format
+    if (result.response && Array.isArray(result.response) && result.response[0]?.decrypted_value) {
+      const hexStr = result.response[0].decrypted_value;
+      console.log("Parsing concatenated hex values:", hexStr);
+      
+      // Each value is 32 bytes = 64 hex characters
+      const chunkSize = 64;
+      for (let i = 0; i < handles.length; i++) {
+        const start = i * chunkSize;
+        const chunk = hexStr.slice(start, start + chunkSize);
+        if (chunk) {
+          const val = BigInt("0x" + chunk);
+          console.log(`Value ${i}: 0x${chunk} = ${val.toString()}`);
+          values.push(val);
+        } else {
+          values.push(BigInt(0));
+        }
+      }
+    }
+    // Format 2: { clearValues: { "0x...handle": "value", ... } }
+    else if (result.clearValues) {
       for (const handle of handles) {
         const val = result.clearValues[handle];
         console.log(`Handle ${handle} -> value:`, val);
@@ -138,8 +157,9 @@ export async function requestPublicDecryption(
           values.push(BigInt(0));
         }
       }
-    } else if (result.decryptedValues) {
-      // Format: { decryptedValues: { "0x...handle": value, ... } }
+    } 
+    // Format 3: { decryptedValues: { "0x...handle": value, ... } }
+    else if (result.decryptedValues) {
       for (const handle of handles) {
         const val = result.decryptedValues[handle];
         console.log(`Handle ${handle} -> decryptedValue:`, val);
@@ -149,18 +169,21 @@ export async function requestPublicDecryption(
           values.push(BigInt(0));
         }
       }
-    } else if (Array.isArray(result.values)) {
-      // Format: { values: [value1, value2, ...] }
+    } 
+    // Format 4: { values: [value1, value2, ...] }
+    else if (Array.isArray(result.values)) {
       for (const val of result.values) {
         values.push(BigInt(val));
       }
-    } else if (Array.isArray(result)) {
-      // Format: [value1, value2, ...]
+    } 
+    // Format 5: [value1, value2, ...]
+    else if (Array.isArray(result)) {
       for (const val of result) {
         values.push(BigInt(val));
       }
-    } else {
-      // Try direct handle lookup
+    } 
+    // Fallback: direct handle lookup
+    else {
       for (const handle of handles) {
         const val = result[handle];
         console.log(`Direct lookup ${handle} ->`, val);
