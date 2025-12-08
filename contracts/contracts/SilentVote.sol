@@ -111,19 +111,23 @@ contract SilentVote is ZamaEthereumConfig {
 
     /**
      * @notice Allow decryption of results after voting ends
+     * @dev Each user must call this and pay gas to view results
      * @param _proposalId The proposal to prepare for decryption
      */
     function allowDecryption(uint256 _proposalId) external {
         Proposal storage proposal = proposals[_proposalId];
         
-        require(proposal.status == ProposalStatus.Active, "Not active");
+        require(proposal.status != ProposalStatus.Decrypted, "Already finalized");
         require(block.timestamp >= proposal.endTime, "Voting not ended");
 
-        // Mark values as publicly decryptable
+        // Mark values as publicly decryptable (safe to call multiple times)
         FHE.makePubliclyDecryptable(proposal.yesVotes);
         FHE.makePubliclyDecryptable(proposal.noVotes);
 
-        proposal.status = ProposalStatus.PendingDecryption;
+        // Update status if first time
+        if (proposal.status == ProposalStatus.Active) {
+            proposal.status = ProposalStatus.PendingDecryption;
+        }
 
         // Emit handles for frontend to request decryption
         emit DecryptionReady(

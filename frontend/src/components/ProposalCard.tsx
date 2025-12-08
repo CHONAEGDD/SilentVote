@@ -185,9 +185,7 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
 
   /**
    * View results flow:
-   * 1. Check on-chain status
-   * 2. If Active (0) -> call allowDecryption (needs gas, only first time)
-   * 3. If PendingDecryption (1) -> call relayer directly (no gas)
+   * Every user must call allowDecryption() and pay gas to view results
    */
   const handleViewResults = async () => {
     if (!address) {
@@ -201,45 +199,11 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
     }
 
     setIsDecrypting(true);
-    setCurrentOperation("Checking status", 1);
+    setCurrentOperation("Preparing decryption (gas required)", 1);
+    setPendingDecrypt(true);
     
     try {
-      // Read current on-chain status
-      const onchainData = await publicClient?.readContract({
-        address: CONTRACT_ADDRESS as `0x${string}`,
-        abi: SILENTVOTE_ABI,
-        functionName: "getProposal",
-        args: [BigInt(proposal.id)],
-      }) as [string, string, bigint, number, bigint, bigint];
-
-      const onchainStatus = Number(onchainData[3]);
-      
-      console.log("On-chain status:", onchainStatus);
-
-      if (onchainStatus === 2) {
-        // Already decrypted on-chain
-        const yesVotes = Number(onchainData[4]);
-        const noVotes = Number(onchainData[5]);
-        
-        setDecryptedResult({ yes: yesVotes, no: noVotes });
-        updateProposal(proposal.id, { status: 2, decryptedYes: yesVotes, decryptedNo: noVotes });
-        
-        toast.success(`Results: Yes ${yesVotes}, No ${noVotes}`);
-        setIsDecrypting(false);
-        setCurrentOperation(null);
-        return;
-      }
-
-      if (onchainStatus === 1) {
-        // Already pending decryption, just call relayer (no gas needed)
-        performDecryption();
-        return;
-      }
-
-      // Status is 0 (Active), need to call allowDecryption first
-      setCurrentOperation("Preparing decryption (gas required)", 2);
-      setPendingDecrypt(true);
-      
+      // Always call allowDecryption - requires gas every time
       writeAllowDecrypt({
         address: CONTRACT_ADDRESS as `0x${string}`,
         abi: SILENTVOTE_ABI,
@@ -252,19 +216,14 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
       console.error("View results error:", error);
       const msg = error.message || "";
       
-      if (msg.includes("Not active") || msg.includes("Voting not ended")) {
-        performDecryption();
-      } else if (msg.includes("rejected")) {
+      if (msg.includes("rejected")) {
         toast.error("Transaction rejected");
-        setIsDecrypting(false);
-        setPendingDecrypt(false);
-        setCurrentOperation(null);
       } else {
         toast.error("Failed: " + msg.slice(0, 40));
-        setIsDecrypting(false);
-        setPendingDecrypt(false);
-        setCurrentOperation(null);
       }
+      setIsDecrypting(false);
+      setPendingDecrypt(false);
+      setCurrentOperation(null);
     }
   };
 
