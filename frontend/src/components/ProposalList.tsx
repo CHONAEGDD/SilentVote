@@ -20,7 +20,7 @@ export function ProposalList() {
     functionName: "proposalCount",
   });
 
-  // Sync proposals from chain (preserving local decryption results)
+  // Sync proposals from chain (use on-chain status as source of truth)
   const syncFromChain = useCallback(async () => {
     if (!publicClient || !proposalCount) return;
 
@@ -44,19 +44,23 @@ export function ProposalList() {
             args: [BigInt(id)],
           }) as [string, string, bigint, number, bigint, bigint];
 
-          // Check for locally cached decryption result
+          const status = Number(data[3]);
           let decryptedYes = Number(data[4]);
           let decryptedNo = Number(data[5]);
-          let status = Number(data[3]);
 
-          const cached = localStorage.getItem(`silentvote_result_${id}`);
-          if (cached) {
-            try {
-              const parsed = JSON.parse(cached);
-              decryptedYes = parsed.yes;
-              decryptedNo = parsed.no;
-              status = 2; // Mark as decrypted if we have cached result
-            } catch {}
+          // Only use cache if status is PendingDecryption (1) and cache has actual votes
+          if (status === 1) {
+            const cached = localStorage.getItem(`silentvote_result_${id}`);
+            if (cached) {
+              try {
+                const parsed = JSON.parse(cached);
+                // Only use cache if it has actual votes
+                if (parsed.yes > 0 || parsed.no > 0) {
+                  decryptedYes = parsed.yes;
+                  decryptedNo = parsed.no;
+                }
+              } catch {}
+            }
           }
 
           onchainProposals.push({
@@ -64,7 +68,7 @@ export function ProposalList() {
             title: data[0],
             creator: data[1],
             endTime: Number(data[2]) * 1000, // Convert seconds to ms
-            status,
+            status, // Always use on-chain status
             decryptedYes,
             decryptedNo,
           });

@@ -42,16 +42,25 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
 
   const hasVoted = userVotes.some((v) => v.proposalId === proposal.id);
 
-  // Load cached decryption result from localStorage
+  // Load cached decryption result from localStorage (only if status is PendingDecryption)
   useEffect(() => {
-    const cached = localStorage.getItem(`silentvote_result_${proposal.id}`);
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        setLocalDecrypted(parsed);
-      } catch {}
+    // Only use cache if on-chain status is PendingDecryption (1)
+    if (proposal.status === 1) {
+      const cached = localStorage.getItem(`silentvote_result_${proposal.id}`);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          // Only use if it has actual votes
+          if (parsed.yes > 0 || parsed.no > 0) {
+            setLocalDecrypted(parsed);
+          }
+        } catch {}
+      }
+    } else {
+      // Clear local state if on-chain status changed
+      setLocalDecrypted(null);
     }
-  }, [proposal.id]);
+  }, [proposal.id, proposal.status]);
 
   // Timer
   useEffect(() => {
@@ -128,18 +137,19 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
       const yesVotes = Number(values[0]);
       const noVotes = Number(values[1]);
 
-      // Save to localStorage for persistence
-      localStorage.setItem(`silentvote_result_${proposal.id}`, JSON.stringify({ yes: yesVotes, no: noVotes }));
-      setLocalDecrypted({ yes: yesVotes, no: noVotes });
+      // Only save to localStorage if there are actual votes
+      if (yesVotes > 0 || noVotes > 0) {
+        localStorage.setItem(`silentvote_result_${proposal.id}`, JSON.stringify({ yes: yesVotes, no: noVotes }));
+        setLocalDecrypted({ yes: yesVotes, no: noVotes });
+      }
 
-      // Update store
+      // Update store (keep status as-is from chain, just update display values)
       updateProposal(proposal.id, { 
-        status: 2, 
         decryptedYes: yesVotes, 
         decryptedNo: noVotes 
       });
 
-      toast.success("Results ready!");
+      toast.success(`Results: Yes ${yesVotes}, No ${noVotes}`);
     } catch (error: any) {
       console.error("Decryption error:", error);
       const msg = error.message || "";
@@ -236,11 +246,13 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
         const yesVotes = Number(onchainData[4]);
         const noVotes = Number(onchainData[5]);
         
-        localStorage.setItem(`silentvote_result_${proposal.id}`, JSON.stringify({ yes: yesVotes, no: noVotes }));
-        setLocalDecrypted({ yes: yesVotes, no: noVotes });
+        if (yesVotes > 0 || noVotes > 0) {
+          localStorage.setItem(`silentvote_result_${proposal.id}`, JSON.stringify({ yes: yesVotes, no: noVotes }));
+          setLocalDecrypted({ yes: yesVotes, no: noVotes });
+        }
         updateProposal(proposal.id, { status: 2, decryptedYes: yesVotes, decryptedNo: noVotes });
         
-        toast.success("Results loaded!");
+        toast.success(`Results: Yes ${yesVotes}, No ${noVotes}`);
         setIsDecrypting(false);
         setCurrentOperation(null);
         return;
@@ -295,8 +307,13 @@ export function ProposalCard({ proposal }: ProposalCardProps) {
   // Use local decrypted values if available, otherwise use proposal values
   const displayYes = localDecrypted?.yes ?? proposal.decryptedYes;
   const displayNo = localDecrypted?.no ?? proposal.decryptedNo;
-  const isDecryptedLocally = localDecrypted !== null;
-  const showResults = proposal.status === 2 || isDecryptedLocally;
+  
+  // Show results only if:
+  // 1. On-chain status is Decrypted (2) with actual results, OR
+  // 2. We have locally decrypted values with actual votes
+  const hasOnchainResults = proposal.status === 2 && (proposal.decryptedYes > 0 || proposal.decryptedNo > 0);
+  const hasLocalResults = localDecrypted !== null && (localDecrypted.yes > 0 || localDecrypted.no > 0);
+  const showResults = hasOnchainResults || hasLocalResults;
 
   const totalVotes = displayYes + displayNo;
   const yesPercent = totalVotes > 0 ? (displayYes / totalVotes) * 100 : 50;
